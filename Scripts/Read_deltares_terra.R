@@ -6,7 +6,7 @@ library(terra)
 library(ncdf4)
 library(sf)
 
-flag_plot = TRUE
+flag_plot = FALSE
 
 #### Get coastline ####
 iho = st_read("Data/external/iho", layer = "iho")
@@ -19,10 +19,12 @@ directory <- "D:/Joligoos/OneDrive - UGent/WEc446/Joligoos/Documents/Doctoraat/D
 directory_out <- "Data/processed/DELFT3D/"
 
 # Specify year
-year_id = 2020
-year_id = 2019
-year_id = 2018
-year_id = 2014
+# year_id = 2020
+# year_id = 2019
+# year_id = 2018
+# year_id = 2014
+# year_id = 2015
+year_id = 2016
 
 # Change directory to the year
 directory_year = paste0(directory, year_id)
@@ -78,6 +80,7 @@ list_nc = lapply(domains, function(zone) {
   
   # Bind data 
   nc_df <- cbind(nc_df, temp_list)
+  # nc_df <- nc_df %>% dplyr::select(-depth)
   print(paste0("Finished zone ", zone))
   return(nc_df)
   
@@ -86,6 +89,7 @@ list_nc = lapply(domains, function(zone) {
 # Join the output
 nc_df = do.call(rbind, list_nc)
 rm(list_nc)
+gc()
 
 if(flag_plot){
   nc_df %>% 
@@ -98,12 +102,84 @@ if(flag_plot){
 }
 
 #### Filter ####
-nc_df = nc_df %>% filter(lat > 48.8 & lat < 52.2 & lon > -3.2 & lon < 4.7)
+nc_df = nc_df %>% filter(lat > 48.8 & lat < 53.5 & lon > -3.2 & lon < 5)
+
+#### Second part (too big to do in one time ) ####
+domains = c("13", "14")
+# domains = c("08")
+# Seem to only need 2 and 12 (leave 13 and 14 for now)
+list_nc = lapply(domains, function(zone) {
+  file_name = paste0(directory_year, "/DCSM-FM_0_5nm_00", zone, "_map.nc")
+  
+  # Get depth and temperature data of zone
+  nc_input <- nc_open(file_name)
+  lon <-  ncvar_get(nc_input, "mesh2d_face_x")
+  lat <- ncvar_get(nc_input, "mesh2d_face_y")
+  dep <- ncvar_get(nc_input, "mesh2d_waterdepth")
+  temp <- ncvar_get(nc_input, "mesh2d_tem1")
+  nc_close(nc_input)
+  
+  #### Make data frame of netcdf data ####
+  # Depth data
+  nc_df <- data.frame(
+    timestep = rep(1:n_timestep, each = length(lon)),
+    lon = rep(lon, n_timestep),
+    lat = rep(lat, n_timestep),
+    depth = as.vector(dep)
+  )
+  
+  # Temperature data English Channel
+  temp_list <- lapply(1:20, function(depth_layer) {
+    temp <- as.vector(temp[depth_layer, , ])
+  })
+  names(temp_list) <- paste0("temp", seq(1:20))
+  
+  # Bind data 
+  nc_df <- cbind(nc_df, temp_list)
+  # nc_df <- nc_df %>% dplyr::select(-depth)
+  print(paste0("Finished zone ", zone))
+  return(nc_df)
+  
+})
+
+# Join the output
+nc_df2 = do.call(rbind, list_nc)
+rm(list_nc)
+gc()
+
+if(flag_plot){
+  nc_df2 %>% 
+    filter(timestep == 1) %>% 
+    select(2,3) %>% 
+    ggplot() +
+    coord_quickmap() +
+    geom_point(aes(lon,lat),
+               colour = "palegreen4", size = 0.01)
+}
+
+nc_df2 = nc_df2 %>% filter(lat > 48.8 & lat < 53.5 & lon > -3.2 & lon < 5)
+gc()
+nc_df = rbind(nc_df,nc_df2)
+rm(nc_df2)
+gc()
+
+if(flag_plot){
+  nc_df %>% 
+    filter(timestep == 2) %>% 
+    select(2,3) %>% 
+    ggplot() +
+    coord_quickmap() +
+    geom_point(aes(lon,lat),
+               colour = "palegreen4", size = 0.01)
+}
+
+
+nc_df = nc_df %>% filter(timestep > 179)
 
 #### Put data on raster ####
 # Create raster of appropriate resolution
-rast_new_reshi = rast(xmin = -3, xmax = 4.5, ymin = 49, ymax= 52, resolution = c(0.0125, 0.00833))
-rast_new_reslow = rast(xmin = -3, xmax = 4.5, ymin = 49, ymax= 52, resolution = c(0.0125, 0.00833)*2)
+rast_new_reshi = rast(xmin = -3.2, xmax = 5, ymin = 48.8, ymax= 53, resolution = c(0.0125, 0.00833))
+rast_new_reslow = rast(xmin = -3.2, xmax = 5, ymin = 48.8, ymax= 53, resolution = c(0.0125, 0.00833)*2)
 
 # Make mask
 iho_v = iho %>% vect() # vectorize iho
@@ -126,10 +202,11 @@ sf_df = st_as_sf(nc_df,
                  coords = c("lon", "lat"),
                  crs = 4326)
 rm(nc_df)
+gc()
 
 #### Make raster per day ####
 
-lapply(48:n_timestep, function(timestep_i){
+lapply(180:n_timestep, function(timestep_i){
   print(paste0("Started with date ", datestamp[timestep_i]))
   # Filter for specific timestep
   sf_df_day = sf_df %>% filter(timestep == timestep_i)
@@ -166,7 +243,7 @@ lapply(48:n_timestep, function(timestep_i){
   timedim <- ncdim_def("time", "seconds since 2011-12-22 00:00:00", longname = 'time',
                        vals = time_seconds[timestep_i])
   # Define variables
-  var_dep <- ncvar_def("DEPTH", units = "m", 
+  var_dep <- ncvar_def("DEPTH", units = "m",
                        longname = "Water depth at pressure points",
                        dim = list(londim, latdim),
                        missval = -3.4e+38)
